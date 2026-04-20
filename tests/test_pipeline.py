@@ -51,11 +51,8 @@ def test_credit_model_probabilities_valid():
 
 
 def test_fraud_model_probabilities_valid():
-    fm    = joblib.load('data/feature_store/fraud_model.pkl')
-    dummy = pd.DataFrame(np.zeros((5, 11)), columns=[
-        'type_enc', 'amount_log', 'oldbalanceOrg', 'newbalanceOrig',
-        'oldbalanceDest', 'newbalanceDest', 'balance_diff_orig',
-        'balance_diff_dest', 'zero_orig_after', 'zero_dest_before', 'hour'
-    ])
+    fm   = joblib.load('data/feature_store/fraud_model.pkl')
+    feat = joblib.load('data/feature_store/fraud_features.pkl')
+    dummy = pd.DataFrame(np.zeros((5, len(feat))), columns=feat)
     probs = fm.predict_proba(dummy)[:, 1]
     assert all(0.0 <= p <= 1.0 for p in probs)

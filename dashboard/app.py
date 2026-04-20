@@ -253,20 +253,32 @@ elif page == 'Fraud Insights':
         st.stop()
 
     df2 = pd.read_csv(fp)
-    c1, c2, c3 = st.columns(3)
+    sp  = os.path.join(BASE, 'data/raw/fraud_source.txt')
+    source = open(sp).read().strip() if os.path.exists(sp) else 'synthetic'
+
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric('Total Transactions', f'{len(df2):,}')
     c2.metric('Fraud Cases',        f'{df2["isFraud"].sum():,}')
     c3.metric('Fraud Rate',         f'{df2["isFraud"].mean():.3%}')
+    c4.metric('Data Source', 'Real (OpenML)' if source == 'creditcard' else 'Synthetic')
 
     col1, col2 = st.columns(2)
     with col1:
-        tc = df2.groupby('type')['isFraud'].agg(['sum', 'count']).reset_index()
-        tc.columns = ['Type', 'Fraud', 'Total']
-        tc['Rate'] = tc['Fraud'] / tc['Total']
-        fig = px.bar(tc, x='Type', y='Rate', color='Rate',
-                     color_continuous_scale='Reds',
-                     title='Fraud Rate by Transaction Type')
-        fig.update_yaxes(tickformat='.3%')
+        if source == 'creditcard' and 'hour' in df2.columns:
+            hr = df2.groupby(df2['hour'].round(0).astype(int))['isFraud'].mean().reset_index()
+            hr.columns = ['Hour', 'Fraud Rate']
+            fig = px.bar(hr, x='Hour', y='Fraud Rate', color='Fraud Rate',
+                         color_continuous_scale='Reds',
+                         title='Fraud Rate by Hour of Day (Real Data)')
+            fig.update_yaxes(tickformat='.3%')
+        else:
+            tc = df2.groupby('type')['isFraud'].agg(['sum', 'count']).reset_index()
+            tc.columns = ['Type', 'Fraud', 'Total']
+            tc['Rate'] = tc['Fraud'] / tc['Total']
+            fig = px.bar(tc, x='Type', y='Rate', color='Rate',
+                         color_continuous_scale='Reds',
+                         title='Fraud Rate by Transaction Type')
+            fig.update_yaxes(tickformat='.3%')
         st.plotly_chart(fig, use_container_width=True)
     with col2:
         fig2 = px.histogram(df2, x='amount', nbins=50, log_y=True,

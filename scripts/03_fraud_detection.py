@@ -8,7 +8,7 @@ import joblib
 import torch
 import torch.nn as nn
 from sklearn.ensemble import IsolationForest, RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder, StandardScaler
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 from imblearn.over_sampling import SMOTE
@@ -18,24 +18,40 @@ print('=== Fraud Detection ===')
 df = pd.read_csv('data/raw/fraud_transactions.csv')
 print(f'Data: {df.shape}  fraud_rate={df["isFraud"].mean():.4f}')
 
-le = LabelEncoder()
-df['type_enc']          = le.fit_transform(df['type'])
-df['balance_diff_orig'] = (df['newbalanceOrig'] - df['oldbalanceOrg'] + df['amount']).abs()
-df['balance_diff_dest'] = (df['newbalanceDest'] - df['oldbalanceDest'] - df['amount']).abs()
-df['zero_orig_after']   = (df['newbalanceOrig'] == 0).astype(int)
-df['zero_dest_before']  = (df['oldbalanceDest'] == 0).astype(int)
-df['amount_log']        = np.log1p(df['amount'])
-df['hour']              = df['step'] % 24
+# ── Detect data source and engineer features accordingly ──────────────────────
+source_file = 'data/raw/fraud_source.txt'
+source = open(source_file).read().strip() if os.path.exists(source_file) else 'synthetic'
 
-FEAT = ['type_enc', 'amount_log', 'oldbalanceOrg', 'newbalanceOrig',
-        'oldbalanceDest', 'newbalanceDest', 'balance_diff_orig',
-        'balance_diff_dest', 'zero_orig_after', 'zero_dest_before', 'hour']
+if source == 'creditcard':
+    # Real European creditcard dataset — V1-V28 already PCA-transformed
+    v_cols = [f'V{i}' for i in range(1, 29)]
+    df['amount_log'] = np.log1p(df['amount'])
+    FEAT = v_cols + ['amount_log', 'hour']
+    print(f'Using creditcard features ({len(FEAT)} total)')
+else:
+    # Synthetic PaySim-style dataset
+    from sklearn.preprocessing import LabelEncoder
+    le = LabelEncoder()
+    df['type_enc']          = le.fit_transform(df['type'])
+    df['balance_diff_orig'] = (df['newbalanceOrig'] - df['oldbalanceOrg'] + df['amount']).abs()
+    df['balance_diff_dest'] = (df['newbalanceDest'] - df['oldbalanceDest'] - df['amount']).abs()
+    df['zero_orig_after']   = (df['newbalanceOrig'] == 0).astype(int)
+    df['zero_dest_before']  = (df['oldbalanceDest'] == 0).astype(int)
+    df['amount_log']        = np.log1p(df['amount'])
+    df['hour']              = df['step'] % 24
+    FEAT = ['type_enc', 'amount_log', 'oldbalanceOrg', 'newbalanceOrig',
+            'oldbalanceDest', 'newbalanceDest', 'balance_diff_orig',
+            'balance_diff_dest', 'zero_orig_after', 'zero_dest_before', 'hour']
+    print(f'Using PaySim features ({len(FEAT)} total)')
+
+joblib.dump(FEAT, 'data/feature_store/fraud_features.pkl')
 
 X, y = df[FEAT], df['isFraud']
 Xtr, Xte, ytr, yte = train_test_split(X, y, test_size=0.2, stratify=y, random_state=42)
 
 print('Training Isolation Forest...')
-iso = IsolationForest(n_estimators=200, contamination=0.013, random_state=42, n_jobs=-1)
+iso = IsolationForest(n_estimators=200, contamination=float(y.mean()*1.5),
+                      random_state=42, n_jobs=-1)
 iso.fit(Xtr)
 print(f'  AUC: {roc_auc_score(yte, -iso.score_samples(Xte)):.4f}')
 
@@ -57,10 +73,10 @@ Xte_t  = torch.FloatTensor(Xte_sc)
 class AE(nn.Module):
     def __init__(self, d):
         super().__init__()
-        self.enc = nn.Sequential(nn.Linear(d,32), nn.ReLU(),
-                                  nn.Linear(32,16), nn.ReLU(), nn.Linear(16,8))
-        self.dec = nn.Sequential(nn.Linear(8,16), nn.ReLU(),
-                                  nn.Linear(16,32), nn.ReLU(), nn.Linear(32,d))
+        self.enc = nn.Sequential(nn.Linear(d, 32), nn.ReLU(),
+                                  nn.Linear(32, 16), nn.ReLU(), nn.Linear(16, 8))
+        self.dec = nn.Sequential(nn.Linear(8, 16), nn.ReLU(),
+                                  nn.Linear(16, 32), nn.ReLU(), nn.Linear(32, d))
     def forward(self, x): return self.dec(self.enc(x))
 
 
