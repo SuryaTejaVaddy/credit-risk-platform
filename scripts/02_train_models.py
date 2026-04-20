@@ -15,18 +15,31 @@ import matplotlib.pyplot as plt
 import optuna
 optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, TensorDataset
+
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier, VotingClassifier
 from sklearn.metrics import (roc_auc_score, average_precision_score,
                               classification_report, RocCurveDisplay, accuracy_score)
-from imblearn.over_sampling import SMOTE
+from sklearn.base import BaseEstimator, ClassifierMixin
+from imblearn.combine import SMOTEENN
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
+
+try:
+    from catboost import CatBoostClassifier
+    HAS_CATBOOST = True
+except ImportError:
+    HAS_CATBOOST = False
+    print('CatBoost not installed, skipping.')
+
 from src.features.engineer import engineer_credit_features, preprocess_credit_data
 
-print('=== Credit Scoring Model Training ===')
+print('=== Credit Scoring Model Training (Advanced) ===')
 
 df_raw   = pd.read_csv('data/raw/credit_default.csv')
 df_clean = preprocess_credit_data(df_raw)
@@ -41,7 +54,12 @@ X_temp, X_test, y_temp, y_test = train_test_split(X, y, test_size=0.15, random_s
 X_train, X_val, y_train, y_val = train_test_split(X_temp, y_temp, test_size=0.18, random_state=42, stratify=y_temp)
 print(f'Train:{len(X_train)}  Val:{len(X_val)}  Test:{len(X_test)}')
 
-X_bal, y_bal = SMOTE(random_state=42, k_neighbors=5).fit_resample(X_train, y_train)
+# ── SMOTEENN: SMOTE + Edited Nearest Neighbors (cleans boundary noise) ─────────
+print('Applying SMOTEENN (removes noisy boundary samples)...')
+smoteenn = SMOTEENN(random_state=42, smote__k_neighbors=5)
+X_bal, y_bal = smoteenn.fit_resample(X_train, y_train)
+print(f'SMOTEENN: {len(X_train)} → {len(X_bal)} samples  '
+      f'(default rate: {y_bal.mean():.3f})')
 
 scaler = StandardScaler()
 Xtr    = scaler.fit_transform(X_bal)
@@ -64,10 +82,10 @@ def run(name, model, Xtr_=None, y_=None):
         ap  = average_precision_score(y_val, p)
         mlflow.log_metrics({'val_roc_auc': auc, 'val_avg_precision': ap})
         mlflow.sklearn.log_model(model, name)
-    print(f'  {name:30s}  AUC={auc:.4f}  AP={ap:.4f}')
+    print(f'  {name:35s}  AUC={auc:.4f}  AP={ap:.4f}')
     return model, auc
 
-# ── Baseline models ────────────────────────────────────────────────────────────
+# ── Baseline models ─────────────────────────────────────────────────────────────
 models = {
     'LogisticRegression': LogisticRegression(max_iter=1000, C=0.1, random_state=42),
     'RandomForest':       RandomForestClassifier(n_estimators=300, max_depth=10,
@@ -89,7 +107,7 @@ for name, m in models.items():
     results[name] = auc
     trained[name] = tm
 
-# ── Optuna tuning: XGBoost ─────────────────────────────────────────────────────
+# ── Optuna tuning: XGBoost ──────────────────────────────────────────────────────
 print('\nOptuna tuning XGBoost (60 trials)...')
 
 def xgb_objective(trial):
@@ -118,7 +136,7 @@ results['XGBoost_Tuned'] = auc
 trained['XGBoost_Tuned'] = tm
 print(f'  Best XGBoost params: {xgb_study.best_params}')
 
-# ── Optuna tuning: LightGBM ────────────────────────────────────────────────────
+# ── Optuna tuning: LightGBM ─────────────────────────────────────────────────────
 print('\nOptuna tuning LightGBM (60 trials)...')
 
 def lgbm_objective(trial):
@@ -145,49 +163,212 @@ tm, auc = run('LightGBM_Tuned', best_lgbm)
 results['LightGBM_Tuned'] = auc
 trained['LightGBM_Tuned'] = tm
 
-# ── Stacking Ensemble ──────────────────────────────────────────────────────────
+# ── CatBoost with Optuna tuning ─────────────────────────────────────────────────
+if HAS_CATBOOST:
+    print('\nOptuna tuning CatBoost (40 trials)...')
+
+    def catboost_objective(trial):
+        p = {
+            'iterations':        trial.suggest_int('iterations', 300, 700),
+            'depth':             trial.suggest_int('depth', 4, 8),
+            'learning_rate':     trial.suggest_float('learning_rate', 0.01, 0.15, log=True),
+            'l2_leaf_reg':       trial.suggest_float('l2_leaf_reg', 1, 10),
+            'bagging_temperature': trial.suggest_float('bagging_temperature', 0, 1),
+            'border_count':      trial.suggest_int('border_count', 32, 128),
+        }
+        m = CatBoostClassifier(**p, auto_class_weights='Balanced',
+                               random_seed=42, verbose=0, thread_count=-1)
+        m.fit(Xtr, y_bal)
+        return roc_auc_score(y_val, m.predict_proba(Xv)[:, 1])
+
+    cat_study = optuna.create_study(direction='maximize')
+    cat_study.optimize(catboost_objective, n_trials=40, show_progress_bar=False)
+    best_cat = CatBoostClassifier(**cat_study.best_params, auto_class_weights='Balanced',
+                                   random_seed=42, verbose=0, thread_count=-1)
+    tm, auc = run('CatBoost_Tuned', best_cat)
+    results['CatBoost_Tuned'] = auc
+    trained['CatBoost_Tuned'] = tm
+    print(f'  Best CatBoost params: {cat_study.best_params}')
+
+# ── Deep MLP (PyTorch) ──────────────────────────────────────────────────────────
+print('\nTraining Deep MLP (PyTorch)...')
+
+class ResidualBlock(nn.Module):
+    def __init__(self, dim, dropout=0.3):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, dim), nn.BatchNorm1d(dim), nn.GELU(), nn.Dropout(dropout),
+            nn.Linear(dim, dim), nn.BatchNorm1d(dim),
+        )
+        self.act = nn.GELU()
+
+    def forward(self, x):
+        return self.act(x + self.net(x))
+
+
+class TabularMLP(nn.Module):
+    def __init__(self, in_dim, hidden=256, depth=4, dropout=0.3):
+        super().__init__()
+        self.stem = nn.Sequential(
+            nn.Linear(in_dim, hidden), nn.BatchNorm1d(hidden), nn.GELU(), nn.Dropout(dropout)
+        )
+        self.blocks = nn.ModuleList([ResidualBlock(hidden, dropout) for _ in range(depth)])
+        self.head   = nn.Linear(hidden, 1)
+
+    def forward(self, x):
+        x = self.stem(x)
+        for b in self.blocks:
+            x = b(x)
+        return self.head(x).squeeze(1)
+
+
+class MLPWrapper(BaseEstimator, ClassifierMixin):
+    """sklearn-compatible wrapper around TabularMLP."""
+
+    def __init__(self, in_dim, hidden=256, depth=4, dropout=0.3,
+                 epochs=40, lr=3e-4, batch=512):
+        self.in_dim  = in_dim
+        self.hidden  = hidden
+        self.depth   = depth
+        self.dropout = dropout
+        self.epochs  = epochs
+        self.lr      = lr
+        self.batch   = batch
+        self.classes_ = np.array([0, 1])
+
+    def fit(self, X, y):
+        device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        Xt = torch.FloatTensor(np.array(X)).to(device)
+        yt = torch.FloatTensor(np.array(y)).to(device)
+        pos_weight = torch.tensor([(yt == 0).sum() / (yt == 1).sum()]).to(device)
+        ds     = TensorDataset(Xt, yt)
+        loader = DataLoader(ds, batch_size=self.batch, shuffle=True)
+        self.model_ = TabularMLP(self.in_dim, self.hidden, self.depth, self.dropout).to(device)
+        opt  = torch.optim.AdamW(self.model_.parameters(), lr=self.lr, weight_decay=1e-4)
+        sched = torch.optim.lr_scheduler.OneCycleLR(
+            opt, max_lr=self.lr * 5, steps_per_epoch=len(loader), epochs=self.epochs)
+        loss_fn = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        self.model_.train()
+        for _ in range(self.epochs):
+            for xb, yb in loader:
+                opt.zero_grad()
+                loss_fn(self.model_(xb), yb).backward()
+                opt.step()
+                sched.step()
+        self.model_.eval()
+        self.device_ = device
+        return self
+
+    def predict_proba(self, X):
+        with torch.no_grad():
+            Xt = torch.FloatTensor(np.array(X)).to(self.device_)
+            logits = self.model_(Xt).cpu().numpy()
+        probs = 1 / (1 + np.exp(-logits))
+        return np.column_stack([1 - probs, probs])
+
+    def predict(self, X):
+        return (self.predict_proba(X)[:, 1] > 0.5).astype(int)
+
+
+mlp = MLPWrapper(in_dim=Xtr.shape[1], hidden=256, depth=4, dropout=0.3,
+                 epochs=40, lr=3e-4, batch=512)
+mlp.fit(Xtr, y_bal)
+p_mlp = mlp.predict_proba(Xv)[:, 1]
+auc_mlp = roc_auc_score(y_val, p_mlp)
+ap_mlp  = average_precision_score(y_val, p_mlp)
+print(f'  {"DeepMLP":35s}  AUC={auc_mlp:.4f}  AP={ap_mlp:.4f}')
+results['DeepMLP'] = auc_mlp
+trained['DeepMLP'] = mlp
+
+# ── Stacking Ensemble ───────────────────────────────────────────────────────────
 print('\nTraining Stacking Ensemble (tuned base learners)...')
-est = [
+est_stack = [
     ('xgb',  best_xgb),
     ('lgbm', best_lgbm),
     ('rf',   RandomForestClassifier(n_estimators=200, max_depth=8,
                                      class_weight='balanced', random_state=42, n_jobs=-1)),
 ]
-stack = StackingClassifier(estimators=est,
+if HAS_CATBOOST:
+    est_stack.append(('cat', best_cat))
+stack = StackingClassifier(estimators=est_stack,
                              final_estimator=LogisticRegression(C=1.0, max_iter=500),
                              cv=5, n_jobs=-1, passthrough=True)
 tm, auc = run('StackingEnsemble', stack)
 results['StackingEnsemble'] = auc
 trained['StackingEnsemble'] = tm
 
-# ── Select best model ──────────────────────────────────────────────────────────
+# ── Soft Voting Ensemble ────────────────────────────────────────────────────────
+print('\nTraining Soft Voting Ensemble...')
+
+class MLPVotingWrapper(BaseEstimator, ClassifierMixin):
+    """Thin wrapper so MLPWrapper can be used inside VotingClassifier (needs clone)."""
+    def __init__(self, mlp_model):
+        self.mlp_model = mlp_model
+        self.classes_ = np.array([0, 1])
+
+    def fit(self, X, y):
+        return self
+
+    def predict_proba(self, X):
+        return self.mlp_model.predict_proba(X)
+
+    def predict(self, X):
+        return self.mlp_model.predict(X)
+
+
+est_vote = [
+    ('xgb',  best_xgb),
+    ('lgbm', best_lgbm),
+    ('mlp',  MLPVotingWrapper(mlp)),
+]
+if HAS_CATBOOST:
+    est_vote.append(('cat', best_cat))
+
+voter = VotingClassifier(estimators=est_vote, voting='soft', n_jobs=1)
+# fit only the sklearn estimators (MLP already trained)
+voter.fit(Xtr, y_bal)
+p_v   = voter.predict_proba(Xv)[:, 1]
+auc_v = roc_auc_score(y_val, p_v)
+ap_v  = average_precision_score(y_val, p_v)
+with mlflow.start_run(run_name='SoftVotingEnsemble'):
+    mlflow.log_metrics({'val_roc_auc': auc_v, 'val_avg_precision': ap_v})
+print(f'  {"SoftVotingEnsemble":35s}  AUC={auc_v:.4f}  AP={ap_v:.4f}')
+results['SoftVotingEnsemble'] = auc_v
+trained['SoftVotingEnsemble'] = voter
+
+# ── Select best model ───────────────────────────────────────────────────────────
 best_name  = max(results, key=results.get)
 best_model = trained[best_name]
 print(f'\nBest: {best_name}  val_AUC={results[best_name]:.4f}')
 
-# ── Threshold optimisation for accuracy ───────────────────────────────────────
+# ── Threshold optimisation for accuracy ────────────────────────────────────────
 probs_val = best_model.predict_proba(Xv)[:, 1]
 best_thresh, best_acc = 0.5, 0.0
-for t in np.arange(0.3, 0.7, 0.01):
+for t in np.arange(0.25, 0.75, 0.005):
     acc = accuracy_score(y_val, (probs_val > t).astype(int))
     if acc > best_acc:
         best_acc, best_thresh = acc, t
-print(f'Optimal threshold: {best_thresh:.2f}  (val accuracy={best_acc:.4f})')
+print(f'Optimal threshold: {best_thresh:.3f}  (val accuracy={best_acc:.4f})')
 joblib.dump(best_thresh, 'data/feature_store/best_threshold.pkl')
 
-# ── Test set evaluation ────────────────────────────────────────────────────────
+# ── Test set evaluation ─────────────────────────────────────────────────────────
 yp    = best_model.predict_proba(Xte)[:, 1]
 ypred = (yp > best_thresh).astype(int)
 print(f'Test AUC:      {roc_auc_score(y_test, yp):.4f}')
 print(f'Test Accuracy: {accuracy_score(y_test, ypred):.4f}')
 print(classification_report(y_test, ypred, target_names=['No Default', 'Default']))
 
-# ── ROC curves ────────────────────────────────────────────────────────────────
-fig, ax = plt.subplots(figsize=(9, 6))
+# ── All model AUC summary ───────────────────────────────────────────────────────
+print('\n--- Model Leaderboard ---')
+for n, a in sorted(results.items(), key=lambda x: -x[1]):
+    print(f'  {n:35s}  val_AUC={a:.4f}')
+
+# ── ROC curves ─────────────────────────────────────────────────────────────────
+fig, ax = plt.subplots(figsize=(10, 7))
 for name, m in trained.items():
     RocCurveDisplay.from_predictions(y_test, m.predict_proba(Xte)[:, 1], name=name, ax=ax)
-ax.plot([0,1], [0,1], 'k--', lw=0.8)
-ax.set_title('ROC Curves — All Models', fontsize=14)
+ax.plot([0, 1], [0, 1], 'k--', lw=0.8)
+ax.set_title('ROC Curves — All Models (Advanced Branch)', fontsize=14)
 plt.tight_layout()
 plt.savefig('data/processed/roc_curves.png', dpi=150, bbox_inches='tight')
 print('ROC curve saved.')
