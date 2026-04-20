@@ -33,9 +33,11 @@ try:
     sv  = exp.shap_values(Xte_df.head(500))
     if isinstance(sv, list):
         sv = sv[1]
+    elif isinstance(sv, np.ndarray) and sv.ndim == 3:
+        sv = sv[:, :, 1]
     ev = exp.expected_value
     if isinstance(ev, (list, np.ndarray)):
-        ev = ev[1]
+        ev = float(np.array(ev).flat[1])
     print(f'SHAP values shape: {sv.shape}')
 except Exception as e:
     print(f'TreeExplainer failed ({e}), using KernelExplainer...')
