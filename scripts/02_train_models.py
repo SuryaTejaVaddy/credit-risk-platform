@@ -9,6 +9,8 @@ import numpy as np
 import joblib
 import mlflow
 import mlflow.sklearn
+import logging
+logging.getLogger('mlflow').setLevel(logging.ERROR)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -82,7 +84,7 @@ def run(name, model, Xtr_=None, y_=None):
         auc = roc_auc_score(y_val, p)
         ap  = average_precision_score(y_val, p)
         mlflow.log_metrics({'val_roc_auc': auc, 'val_avg_precision': ap})
-        mlflow.sklearn.log_model(model, name)
+        mlflow.sklearn.log_model(sk_model=model, name=name)
     print(f'  {name:35s}  AUC={auc:.4f}  AP={ap:.4f}')
     return model, auc
 
