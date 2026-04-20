@@ -27,6 +27,7 @@ from sklearn.metrics import (roc_auc_score, average_precision_score,
                               classification_report, RocCurveDisplay, accuracy_score)
 from sklearn.base import BaseEstimator, ClassifierMixin
 from imblearn.combine import SMOTEENN
+from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
 
@@ -56,7 +57,7 @@ print(f'Train:{len(X_train)}  Val:{len(X_val)}  Test:{len(X_test)}')
 
 # ── SMOTEENN: SMOTE + Edited Nearest Neighbors (cleans boundary noise) ─────────
 print('Applying SMOTEENN (removes noisy boundary samples)...')
-smoteenn = SMOTEENN(random_state=42, smote__k_neighbors=5)
+smoteenn = SMOTEENN(random_state=42, smote=SMOTE(random_state=42, k_neighbors=5))
 X_bal, y_bal = smoteenn.fit_resample(X_train, y_train)
 print(f'SMOTEENN: {len(X_train)} → {len(X_bal)} samples  '
       f'(default rate: {y_bal.mean():.3f})')
