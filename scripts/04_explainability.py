@@ -42,12 +42,16 @@ except Exception as e:
     bg  = shap.sample(Xte_df, 100)
     exp = shap.KernelExplainer(model.predict_proba, bg)
     sv  = exp.shap_values(Xte_df.head(100))
-    sv  = sv[1] if isinstance(sv, list) else sv
+    # handle list-of-arrays or 3-D ndarray (n_samples, n_features, n_classes)
+    if isinstance(sv, list):
+        sv = sv[1]
+    elif isinstance(sv, np.ndarray) and sv.ndim == 3:
+        sv = sv[:, :, 1]
     ev  = exp.expected_value
     if isinstance(ev, (list, np.ndarray)):
-        ev = ev[1]
+        ev = float(np.array(ev).flat[1])
 
-Xp = Xte_df.head(len(sv))
+Xp = Xte_df.head(sv.shape[0])
 
 plt.figure(figsize=(10, 8))
 shap.summary_plot(sv, Xp, plot_type='bar', show=False)
