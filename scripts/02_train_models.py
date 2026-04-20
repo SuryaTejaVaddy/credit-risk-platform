@@ -24,14 +24,15 @@ from sklearn.metrics import (roc_auc_score, average_precision_score,
 from imblearn.over_sampling import SMOTE
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier
-from src.features.engineer import engineer_credit_features
+from src.features.engineer import engineer_credit_features, preprocess_credit_data
 
 print('=== Credit Scoring Model Training ===')
 
-df_raw = pd.read_csv('data/raw/credit_default.csv')
-df     = engineer_credit_features(df_raw)
+df_raw   = pd.read_csv('data/raw/credit_default.csv')
+df_clean = preprocess_credit_data(df_raw)
+df       = engineer_credit_features(df_clean)
 df.to_csv('data/processed/credit_features.csv', index=False)
-print(f'Features engineered: {df.shape[1]} columns')
+print(f'After preprocessing + engineering: {df.shape[1]} columns')
 
 X = df.drop(columns=['ID', 'target'], errors='ignore')
 y = df['target']
