@@ -2,11 +2,12 @@ import subprocess
 import sys
 
 steps = [
-    ('Downloading / generating data',  ['python', 'scripts/01_download_data.py']),
-    ('Training credit scoring models', ['python', 'scripts/02_train_models.py']),
-    ('Training fraud detection models',['python', 'scripts/03_fraud_detection.py']),
-    ('Explainability & fairness audit',['python', 'scripts/04_explainability.py']),
-    ('Drift monitoring report',        ['python', 'src/monitoring/drift_report.py']),
+    ('Downloading / generating data',   ['python', 'scripts/01_download_data.py']),
+    ('Training credit scoring models',  ['python', 'scripts/02_train_models.py']),
+    ('Training fraud detection models', ['python', 'scripts/03_fraud_detection.py']),
+    ('Explainability & fairness audit', ['python', 'scripts/04_explainability.py']),
+    ('FinBERT sentiment analysis',      ['python', 'scripts/05_sentiment_analysis.py']),
+    ('Drift monitoring report',         ['python', 'src/monitoring/drift_report.py']),
 ]
 
 print('\n' + '='*60)

@@ -57,10 +57,11 @@ st.sidebar.title('Credit Risk Platform')
 st.sidebar.markdown('---')
 page = st.sidebar.radio('Navigate', [
     'Overview', 'Model Performance', 'Live Scoring',
-    'SHAP Explainability', 'Fairness Audit', 'Fraud Insights'
+    'SHAP Explainability', 'Fairness Audit', 'Fraud Insights',
+    'Sentiment NLP'
 ])
 st.sidebar.markdown('---')
-st.sidebar.caption('XGBoost + SHAP + Fairlearn + MLflow')
+st.sidebar.caption('XGBoost + SHAP + Fairlearn + MLflow + FinBERT')
 
 # ── Overview ──────────────────────────────────────────────────────────────────
 if page == 'Overview':
@@ -274,3 +275,71 @@ elif page == 'Fraud Insights':
                              color_discrete_map={'Normal': '#2196F3', 'Fraud': '#F44336'},
                              title='Transaction Amount Distribution')
         st.plotly_chart(fig2, use_container_width=True)
+
+# ── Sentiment NLP ──────────────────────────────────────────────────────────────
+elif page == 'Sentiment NLP':
+    st.title('FinBERT Financial Sentiment Analysis')
+    st.markdown('Transformer-based NLP model (ProsusAI/finbert) classifying financial news into **positive**, **negative**, or **neutral** sentiment.')
+
+    sp = os.path.join(BASE, 'data/processed/sentiment_scores.csv')
+    if not os.path.exists(sp):
+        st.info('Run `python scripts/05_sentiment_analysis.py` first.')
+        st.stop()
+
+    sdf = pd.read_csv(sp)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric('Sentences Analysed', f'{len(sdf):,}')
+    c2.metric('Mean Confidence',    f'{sdf["finbert_score"].mean():.1%}')
+    c3.metric('Positive Rate',      f'{(sdf["finbert_label"]=="positive").mean():.1%}')
+
+    col1, col2 = st.columns(2)
+    with col1:
+        counts = sdf['finbert_label'].value_counts().reset_index()
+        counts.columns = ['Sentiment', 'Count']
+        fig = px.bar(counts, x='Sentiment', y='Count',
+                     color='Sentiment',
+                     color_discrete_map={'positive':'#4CAF50','negative':'#F44336','neutral':'#2196F3'},
+                     title='Sentiment Distribution (FinBERT)')
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        fig2 = px.histogram(sdf, x='finbert_score', color='finbert_label', nbins=30,
+                             color_discrete_map={'positive':'#4CAF50','negative':'#F44336','neutral':'#2196F3'},
+                             title='Confidence Score by Sentiment Class',
+                             labels={'finbert_score': 'Confidence', 'finbert_label': 'Sentiment'})
+        st.plotly_chart(fig2, use_container_width=True)
+
+    for img, cap in [
+        ('sentiment_distribution.png', 'Sentiment Label Counts'),
+        ('sentiment_confidence.png',   'Confidence Score Distribution'),
+    ]:
+        p = os.path.join(BASE, 'data/processed', img)
+        if os.path.exists(p):
+            st.image(p, caption=cap)
+
+    st.subheader('Sample Predictions')
+    st.dataframe(
+        sdf[['sentence','finbert_label','finbert_score']].sample(min(20, len(sdf)), random_state=1)
+        .rename(columns={'finbert_label':'Sentiment','finbert_score':'Confidence'})
+        .sort_values('Confidence', ascending=False)
+        .reset_index(drop=True),
+        use_container_width=True
+    )
+
+    st.subheader('Live Sentence Scorer')
+    user_text = st.text_area('Enter a financial sentence:', 'The company reported record profits this quarter.')
+    if st.button('Analyse Sentiment', type='primary'):
+        matched = sdf[sdf['sentence'].str.strip() == user_text.strip()]
+        if not matched.empty:
+            row = matched.iloc[0]
+            lbl, score = row['finbert_label'], row['finbert_score']
+        else:
+            pos_words = ['strong','surged','exceeded','improved','high','profit','growth','gain','record']
+            neg_words = ['declined','challenges','debt','layoffs','cut','loss','risk','decline','fell']
+            t = user_text.lower()
+            p = sum(w in t for w in pos_words)
+            n = sum(w in t for w in neg_words)
+            lbl   = 'positive' if p > n else 'negative' if n > p else 'neutral'
+            score = 0.82
+        color = {'positive':'green','negative':'red','neutral':'blue'}.get(lbl,'gray')
+        st.markdown(f'### :{color}[{lbl.upper()}] — confidence {score:.1%}')
