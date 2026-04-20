@@ -68,12 +68,20 @@ except Exception as e:
 print('Downloading creditcard fraud dataset (OpenML)...')
 try:
     from sklearn.datasets import fetch_openml
-    data   = fetch_openml('creditcard', version=1, as_frame=True, parser='auto')
-    fraud  = data.frame.copy()
-    fraud['isFraud'] = fraud['Class'].astype(int)
+    data = fetch_openml('creditcard', version=1, as_frame=True, parser='auto')
+    # build a single frame from data + target regardless of API version
+    if hasattr(data, 'frame') and data.frame is not None:
+        fraud = data.frame.copy()
+    else:
+        fraud = data.data.copy()
+        fraud['Class'] = data.target
+    fraud.columns = [str(c) for c in fraud.columns]
+    fraud['isFraud'] = fraud['Class'].astype(float).astype(int)
     fraud['amount']  = fraud['Amount'].astype(float)
-    fraud['hour']    = (fraud['Time'].astype(float) % 86400 / 3600).round(1)
-    fraud.drop(columns=['Class', 'Amount', 'Time'], inplace=True)
+    time_col = next((c for c in fraud.columns if c.lower() == 'time'), None)
+    fraud['hour'] = (fraud[time_col].astype(float) % 86400 / 3600).round(1) if time_col else 0.0
+    drop_cols = [c for c in ['Class', 'Amount'] + ([time_col] if time_col else []) if c in fraud.columns]
+    fraud.drop(columns=drop_cols, inplace=True)
     fraud.to_csv('data/raw/fraud_transactions.csv', index=False)
     print(f'  Real data saved: fraud_transactions.csv  shape={fraud.shape}  fraud_rate={fraud["isFraud"].mean():.4f}')
     # record the data source for downstream scripts
