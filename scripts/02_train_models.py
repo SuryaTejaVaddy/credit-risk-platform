@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from sklearn.model_selection import train_test_split, StratifiedKFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, StackingClassifier, VotingClassifier
+from sklearn.ensemble import RandomForestClassifier, StackingClassifier
 from sklearn.metrics import (roc_auc_score, average_precision_score,
                               classification_report, RocCurveDisplay, accuracy_score)
 from sklearn.base import BaseEstimator, ClassifierMixin
@@ -298,36 +298,34 @@ tm, auc = run('StackingEnsemble', stack)
 results['StackingEnsemble'] = auc
 trained['StackingEnsemble'] = tm
 
-# ── Soft Voting Ensemble ────────────────────────────────────────────────────────
-print('\nTraining Soft Voting Ensemble...')
+# ── Soft Voting Ensemble (manual average — avoids VotingClassifier clone issues) ─
+print('\nBuilding Soft Voting Ensemble...')
 
-class MLPVotingWrapper(BaseEstimator, ClassifierMixin):
-    """Thin wrapper so MLPWrapper can be used inside VotingClassifier (needs clone)."""
-    def __init__(self, mlp_model):
-        self.mlp_model = mlp_model
+base_models = [best_xgb, best_lgbm, mlp]
+if HAS_CATBOOST:
+    base_models.append(best_cat)
+
+
+class ManualSoftVoter(BaseEstimator, ClassifierMixin):
+    """Average predicted probabilities from a list of already-trained models."""
+    _estimator_type = 'classifier'
+
+    def __init__(self, models):
+        self.models   = models
         self.classes_ = np.array([0, 1])
 
     def fit(self, X, y):
         return self
 
     def predict_proba(self, X):
-        return self.mlp_model.predict_proba(X)
+        probs = np.mean([m.predict_proba(X) for m in self.models], axis=0)
+        return probs
 
     def predict(self, X):
-        return self.mlp_model.predict(X)
+        return (self.predict_proba(X)[:, 1] > 0.5).astype(int)
 
 
-est_vote = [
-    ('xgb',  best_xgb),
-    ('lgbm', best_lgbm),
-    ('mlp',  MLPVotingWrapper(mlp)),
-]
-if HAS_CATBOOST:
-    est_vote.append(('cat', best_cat))
-
-voter = VotingClassifier(estimators=est_vote, voting='soft', n_jobs=1)
-# fit only the sklearn estimators (MLP already trained)
-voter.fit(Xtr, y_bal)
+voter = ManualSoftVoter(base_models)
 p_v   = voter.predict_proba(Xv)[:, 1]
 auc_v = roc_auc_score(y_val, p_v)
 ap_v  = average_precision_score(y_val, p_v)

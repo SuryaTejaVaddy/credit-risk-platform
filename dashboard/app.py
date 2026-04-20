@@ -80,7 +80,7 @@ if page == 'Overview':
         pie = df['target'].map({0: 'No Default', 1: 'Default'}).value_counts()
         st.plotly_chart(px.pie(values=pie.values, names=pie.index, hole=0.4,
             color_discrete_sequence=['#2196F3', '#F44336'],
-            title='Class Distribution'), use_container_width=True)
+            title='Class Distribution'), width='stretch')
     with col2:
         tmp = df.copy()
         tmp['age_group'] = pd.cut(tmp['AGE'], bins=[20,30,40,50,60,80],
@@ -89,13 +89,13 @@ if page == 'Overview':
         st.plotly_chart(px.bar(ad, x='age_group', y='target', color='target',
             color_continuous_scale='RdYlGn_r',
             labels={'target': 'Default Rate', 'age_group': 'Age Group'},
-            title='Default Rate by Age Group'), use_container_width=True)
+            title='Default Rate by Age Group'), width='stretch')
 
     st.plotly_chart(px.histogram(df, x='LIMIT_BAL', nbins=50, opacity=0.7, barmode='overlay',
         color=df['target'].map({0: 'No Default', 1: 'Default'}),
         color_discrete_map={'No Default': '#2196F3', 'Default': '#F44336'},
         labels={'LIMIT_BAL': 'Credit Limit (NT$)', 'color': 'Status'},
-        title='Credit Limit Distribution by Default Status'), use_container_width=True)
+        title='Credit Limit Distribution by Default Status'), width='stretch')
 
 # ── Model Performance ─────────────────────────────────────────────────────────
 elif page == 'Model Performance':
@@ -107,7 +107,7 @@ elif page == 'Model Performance':
         'Speed':   ['<1s', '~30s', '~45s', '~20s', '~3min'],
     }).set_index('Model')
     st.dataframe(res.style.highlight_max(subset=['Val AUC', 'Val AP'], color='#C8E6C9'),
-                 use_container_width=True)
+                 width='stretch')
     rp = os.path.join(BASE, 'data/processed/roc_curves.png')
     if os.path.exists(rp):
         st.image(rp, caption='ROC Curves on Test Set')
@@ -141,7 +141,7 @@ elif page == 'Live Scoring':
         mar = st.selectbox('Marital Status', [1,2,3],
             format_func=lambda x: {1: 'Married', 2: 'Single', 3: 'Other'}[x])
 
-    if st.button('Score Applicant', type='primary', use_container_width=True):
+    if st.button('Score Applicant', type='primary', width='stretch'):
         bills = [bill1] + [0]*5
         pmts  = [pmt1]  + [0]*5
         pays  = [pay0]  + [0]*5
@@ -188,7 +188,7 @@ elif page == 'Live Scoring':
                     {'range': [60, 100], 'color': '#FFCDD2'},
                 ],
             }
-        )), use_container_width=True)
+        )), width='stretch')
 
 # ── SHAP ──────────────────────────────────────────────────────────────────────
 elif page == 'SHAP Explainability':
@@ -231,7 +231,7 @@ elif page == 'Fairness Audit':
     ).reset_index()
     s['Actual_Default_Rate']    = s['Actual_Default_Rate'].map('{:.2%}'.format)
     s['Predicted_Default_Rate'] = s['Predicted_Default_Rate'].map('{:.2%}'.format)
-    st.dataframe(s, use_container_width=True)
+    st.dataframe(s, width='stretch')
 
     p2 = aud.groupby('Gender')[['target', 'predicted']].mean().reset_index()
     p2.columns = ['Gender', 'Actual Rate', 'Predicted Rate']
@@ -240,7 +240,7 @@ elif page == 'Fairness Audit':
                  title='Actual vs Predicted Default Rate by Gender',
                  color_discrete_sequence=['#2196F3', '#FF5722'])
     fig.update_yaxes(tickformat='.0%')
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width='stretch')
     st.info('Run scripts/04_explainability.py for the full Fairlearn report in the terminal.')
 
 # ── Fraud ─────────────────────────────────────────────────────────────────────
@@ -279,14 +279,14 @@ elif page == 'Fraud Insights':
                          color_continuous_scale='Reds',
                          title='Fraud Rate by Transaction Type')
             fig.update_yaxes(tickformat='.3%')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with col2:
         fig2 = px.histogram(df2, x='amount', nbins=50, log_y=True,
                              opacity=0.7, barmode='overlay',
                              color=df2['isFraud'].map({0: 'Normal', 1: 'Fraud'}),
                              color_discrete_map={'Normal': '#2196F3', 'Fraud': '#F44336'},
                              title='Transaction Amount Distribution')
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
 # ── Sentiment NLP ──────────────────────────────────────────────────────────────
 elif page == 'Sentiment NLP':
@@ -313,13 +313,13 @@ elif page == 'Sentiment NLP':
                      color='Sentiment',
                      color_discrete_map={'positive':'#4CAF50','negative':'#F44336','neutral':'#2196F3'},
                      title='Sentiment Distribution (FinBERT)')
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width='stretch')
     with col2:
         fig2 = px.histogram(sdf, x='finbert_score', color='finbert_label', nbins=30,
                              color_discrete_map={'positive':'#4CAF50','negative':'#F44336','neutral':'#2196F3'},
                              title='Confidence Score by Sentiment Class',
                              labels={'finbert_score': 'Confidence', 'finbert_label': 'Sentiment'})
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width='stretch')
 
     for img, cap in [
         ('sentiment_distribution.png', 'Sentiment Label Counts'),
@@ -335,7 +335,7 @@ elif page == 'Sentiment NLP':
         .rename(columns={'finbert_label':'Sentiment','finbert_score':'Confidence'})
         .sort_values('Confidence', ascending=False)
         .reset_index(drop=True),
-        use_container_width=True
+        width='stretch'
     )
 
     st.subheader('Live Sentence Scorer')
